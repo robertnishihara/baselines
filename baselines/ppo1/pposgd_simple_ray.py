@@ -245,25 +245,37 @@ class PPOActor(object):
         self.setfromflat(params)
 
 
-def main():
+def learn(env_creator, policy_fn, *,
+        timesteps_per_actorbatch, # timesteps per actor per update
+        clip_param, entcoeff, # clipping parameter epsilon, entropy coeff
+        optim_epochs, optim_stepsize, optim_batchsize,# optimization hypers
+        gamma, lam, # advantage estimation
+        max_timesteps=0, max_episodes=0, max_iters=0, max_seconds=0,  # time constraint
+        callback=None, # you can do anything in the callback, since it takes locals(), globals()
+        adam_epsilon=1e-5,
+        schedule='constant' # annealing for stepsize parameters (epsilon and adam)
+        ):
 
     ray.init()
 
-    def env_creator():
-        # from baselines.common.cmd_util import make_mujoco_env
-        # env_id = "Humanoid-v1"
-        # seed = 0
-        # return make_mujoco_env(env_id, seed)
-        import gym
-        return gym.make("CartPole-v0")
-        # return gym.make("Humanoid-v2")
+    # def env_creator():
+    #     # from baselines.common.cmd_util import make_mujoco_env
+    #     # env_id = "Humanoid-v1"
+    #     # seed = 0
+    #     # return make_mujoco_env(env_id, seed)
+    #     import gym
+    #     return gym.make("CartPole-v0")
+    #     # return gym.make("Humanoid-v2")
+    #
+    # def policy_fn(name, ob_space, ac_space):
+    #     from baselines.ppo1 import mlp_policy
+    #     return mlp_policy.MlpPolicy(name=name, ob_space=ob_space, ac_space=ac_space,
+    #         hid_size=64, num_hid_layers=2)
 
-    def policy_fn(name, ob_space, ac_space):
-        from baselines.ppo1 import mlp_policy
-        return mlp_policy.MlpPolicy(name=name, ob_space=ob_space, ac_space=ac_space,
-            hid_size=64, num_hid_layers=2)
+    episodes_so_far = 0
+    timesteps_so_far = 0
+    iters_so_far = 0
 
-    schedule = 'constant'
     if schedule == 'constant':
         cur_lrmult = 1.0
     elif schedule == 'linear':
@@ -271,24 +283,17 @@ def main():
     else:
         raise NotImplementedError
 
-    clip_param = 1
-    timesteps_per_actorbatch = 10
-    optim_batchsize = 5
-    optim_stepsize = 0.01
-    entcoeff = 0.5
-
-    adam_epsilon = 1e-5
     actors = [PPOActor.remote(env_creator,
                               policy_fn,
                               timesteps_per_actorbatch=timesteps_per_actorbatch,
                               clip_param=clip_param,
                               entcoeff=entcoeff,
-                              optim_epochs=10,
+                              optim_epochs=optim_epochs,
                               optim_stepsize=optim_stepsize,
                               optim_batchsize=optim_batchsize,
-                              gamma=0.5,
-                              lam=0.5,
-                              max_timesteps=10) for _ in range(3)]
+                              gamma=gamma,
+                              lam=lam,
+                              max_timesteps=max_timesteps) for _ in range(3)]
 
     U.make_session(num_cpu=1).__enter__()
 
@@ -313,7 +318,6 @@ def main():
         print(i)
         [actor.rollout.remote() for actor in actors]
 
-        optim_epochs = 10
         for _ in range(optim_epochs):
 
             [actor.reset_batches.remote() for actor in actors]

@@ -40,6 +40,7 @@ class RunningMeanStd(object):
         totalvec = np.zeros(n*2+1, 'float64')
         addvec = np.concatenate([x.sum(axis=0).ravel(), np.square(x).sum(axis=0).ravel(), np.array([len(x)],dtype='float64')])
 
+        raise Exception("HIHIHIHI")
         print("FIX MeanStdFilter")
         # MPI.COMM_WORLD.Allreduce(addvec, totalvec, op=MPI.SUM)
 
