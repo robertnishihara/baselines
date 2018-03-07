@@ -14,7 +14,7 @@ from baselines.ddpg.noise import *
 
 import gym
 import tensorflow as tf
-from mpi4py import MPI
+# from mpi4py import MPI
 
 def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
     # Configure things.

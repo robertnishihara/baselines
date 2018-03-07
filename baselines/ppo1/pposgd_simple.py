@@ -5,7 +5,7 @@ import tensorflow as tf, numpy as np
 import time
 from baselines.common.mpi_adam import MpiAdam
 from baselines.common.mpi_moments import mpi_moments
-from mpi4py import MPI
+# from mpi4py import MPI
 from collections import deque
 
 def traj_segment_generator(pi, env, horizon, stochastic):

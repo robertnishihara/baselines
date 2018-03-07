@@ -9,7 +9,7 @@ import baselines.common.tf_util as U
 from baselines import logger
 import numpy as np
 import tensorflow as tf
-from mpi4py import MPI
+# from mpi4py import MPI
 
 
 def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, param_noise, actor, critic,

@@ -5,7 +5,7 @@ Disclaimer: this code is highly based on trpo_mpi at @openai/baselines and @open
 import argparse
 import os.path as osp
 import logging
-from mpi4py import MPI
+# from mpi4py import MPI
 from tqdm import tqdm
 
 import numpy as np

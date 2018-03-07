@@ -74,7 +74,7 @@ def nn(input, layers_sizes, reuse=None, flatten=False, name=""):
 
 def install_mpi_excepthook():
     import sys
-    from mpi4py import MPI
+    # from mpi4py import MPI
     old_hook = sys.excepthook
 
     def new_hook(a, b, c):

@@ -5,7 +5,7 @@ Disclaimer: The trpo part highly rely on trpo_mpi at @openai/baselines
 import time
 import os
 from contextlib import contextmanager
-from mpi4py import MPI
+# from mpi4py import MPI
 from collections import deque
 
 import tensorflow as tf
