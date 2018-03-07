@@ -177,6 +177,9 @@ class PPOActor(object):
             raise NotImplementedError
 
         U.initialize()
+
+        self.setfromflat = U.SetFromFlat(self.var_list)
+
         # adam.sync()
 
         # Prepare for rollouts
@@ -239,8 +242,8 @@ class PPOActor(object):
         return g
 
     def set_params(self, params):
-        # This is currently done inside of adam.update.
-        pass
+        self.setfromflat(params)
+
 
 def main():
 
@@ -318,8 +321,8 @@ def main():
             for _ in range(timesteps_per_actorbatch // optim_batchsize):  # CHECK THAT THIS IS THE RIGHT NUMBER OF ITERATIONS!!!
                 gradients = ray.get([actor.get_gradients.remote() for actor in actors])
                 adam.update(gradients, optim_stepsize * cur_lrmult)
-                params = None# Update the params using Adam
-                [actor.set_params.remote(params) for actor in actors]
+                params_id = ray.put(adam.getflat())
+                [actor.set_params.remote(params_id) for actor in actors]
 
 
             # # Here we do a bunch of optimization epochs over the data

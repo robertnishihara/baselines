@@ -4,7 +4,7 @@ import baselines.common.tf_util as U
 import tensorflow as tf, numpy as np
 import time
 from baselines.common import colorize
-from mpi4py import MPI
+# from mpi4py import MPI
 from collections import deque
 from baselines.common.mpi_adam import MpiAdam
 from baselines.common.cg import cg
