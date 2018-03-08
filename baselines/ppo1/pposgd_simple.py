@@ -5,7 +5,7 @@ import tensorflow as tf, numpy as np
 import time
 from baselines.common.mpi_adam import MpiAdam
 from baselines.common.mpi_moments import mpi_moments
-# from mpi4py import MPI
+from mpi4py import MPI
 from collections import deque
 
 def traj_segment_generator(pi, env, horizon, stochastic):
@@ -182,6 +182,8 @@ def learn(env, policy_fn, *,
             for batch in d.iterate_once(optim_batchsize):
                 *newlosses, g = lossandgrad(batch["ob"], batch["ac"], batch["atarg"], batch["vtarg"], cur_lrmult)
                 adam.update(g, optim_stepsize * cur_lrmult)
+                params = adam.getflat()
+                print("params non ray version", params)
                 losses.append(newlosses)
             logger.log(fmt_row(13, np.mean(losses, axis=0)))
 

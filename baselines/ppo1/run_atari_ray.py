@@ -34,7 +34,7 @@ def train(env_id, num_timesteps, seed):
         # env.seed(workerseed)
         return env
 
-    pposgd_simple_ray.learn(env_creator, policy_fn,
+    pposgd_simple_ray.learn(env_creator, policy_fn, seed,
         max_timesteps=int(num_timesteps * 1.1),
         timesteps_per_actorbatch=256,
         clip_param=0.2, entcoeff=0.01,

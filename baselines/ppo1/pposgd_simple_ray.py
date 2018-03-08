@@ -7,6 +7,7 @@ import time
 # from baselines.common.mpi_adam import MpiAdam
 # from baselines.common.mpi_moments import mpi_moments
 # # from mpi4py import MPI
+from baselines.common import set_global_seeds
 from collections import deque
 
 def traj_segment_generator(pi, env, horizon, stochastic):
@@ -131,7 +132,7 @@ def construct_policy(env, policy_fn, clip_param, entcoeff):
 
 @ray.remote
 class PPOActor(object):
-    def __init__(self, env_creator, policy_fn,
+    def __init__(self, env_creator, policy_fn, seed, rank, # Index of this actor, similar to MPI rank
             timesteps_per_actorbatch=None, # timesteps per actor per update
             clip_param=None, entcoeff=None, # clipping parameter epsilon, entropy coeff
             optim_epochs=None, optim_stepsize=None, optim_batchsize=None,# optimization hypers
@@ -139,10 +140,13 @@ class PPOActor(object):
             max_timesteps=0, max_episodes=0, max_iters=0, max_seconds=0,  # time constraint
             callback=None, # you can do anything in the callback, since it takes locals(), globals()
             adam_epsilon=1e-5,
-            schedule='constant' # annealing for stepsize parameters (epsilon and adam)
+            schedule='constant', # annealing for stepsize parameters (epsilon and adam)
             ):
 
         U.make_session(num_cpu=1).__enter__()
+
+        workerseed = seed + 10000 * rank
+        set_global_seeds(workerseed)
 
         self.env = env_creator()
         self.clip_param = clip_param
@@ -245,7 +249,7 @@ class PPOActor(object):
         self.setfromflat(params)
 
 
-def learn(env_creator, policy_fn, *,
+def learn(env_creator, policy_fn, seed, *,
         timesteps_per_actorbatch, # timesteps per actor per update
         clip_param, entcoeff, # clipping parameter epsilon, entropy coeff
         optim_epochs, optim_stepsize, optim_batchsize,# optimization hypers
@@ -285,6 +289,8 @@ def learn(env_creator, policy_fn, *,
 
     actors = [PPOActor.remote(env_creator,
                               policy_fn,
+                              rank,
+                              seed,
                               timesteps_per_actorbatch=timesteps_per_actorbatch,
                               clip_param=clip_param,
                               entcoeff=entcoeff,
@@ -293,7 +299,7 @@ def learn(env_creator, policy_fn, *,
                               optim_batchsize=optim_batchsize,
                               gamma=gamma,
                               lam=lam,
-                              max_timesteps=max_timesteps) for _ in range(3)]
+                              max_timesteps=max_timesteps) for rank in range(2)]
 
     U.make_session(num_cpu=1).__enter__()
 
@@ -325,7 +331,9 @@ def learn(env_creator, policy_fn, *,
             for _ in range(timesteps_per_actorbatch // optim_batchsize):  # CHECK THAT THIS IS THE RIGHT NUMBER OF ITERATIONS!!!
                 gradients = ray.get([actor.get_gradients.remote() for actor in actors])
                 adam.update(gradients, optim_stepsize * cur_lrmult)
-                params_id = ray.put(adam.getflat())
+                params = adam.getflat()
+                print("params ray version ", params)
+                params_id = ray.put(params)
                 [actor.set_params.remote(params_id) for actor in actors]
 
 
