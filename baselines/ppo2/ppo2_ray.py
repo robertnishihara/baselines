@@ -1,12 +1,25 @@
 import os
 import time
 import joblib
+import multiprocessing
 import numpy as np
 import os.path as osp
+import ray
+import sys
 import tensorflow as tf
 from baselines import logger
 from collections import deque
 from baselines.common import explained_variance
+
+def enter_tf_session():
+    ncpu = multiprocessing.cpu_count()
+    if sys.platform == 'darwin': ncpu //= 2
+    config = tf.ConfigProto(allow_soft_placement=True,
+                            intra_op_parallelism_threads=ncpu,
+                            inter_op_parallelism_threads=ncpu)
+    config.gpu_options.allow_growth = True #pylint: disable=E1101
+    tf.Session(config=config).__enter__()
+
 
 class Model(object):
     def __init__(self, *, policy, ob_space, ac_space, nbatch_act, nbatch_train,
@@ -48,6 +61,8 @@ class Model(object):
         trainer = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
         _train = trainer.apply_gradients(grads)
 
+        self.variables = ray.experimental.TensorFlowVariables(loss, sess=sess)
+
         def train(lr, cliprange, obs, returns, masks, actions, values, neglogpacs, states=None):
             advs = returns - values
             advs = (advs - advs.mean()) / (advs.std() + 1e-8)
@@ -86,17 +101,23 @@ class Model(object):
 
 class Runner(object):
 
-    def __init__(self, *, env, model, nsteps, gamma, lam):
-        self.env = env
-        self.model = model
-        nenv = env.num_envs
-        self.obs = np.zeros((nenv,) + env.observation_space.shape, dtype=model.train_model.X.dtype.name)
-        self.obs[:] = env.reset()
+    # def __init__(self, *, env, model, nsteps, gamma, lam):
+    def __init__(self, env_creator=None, model_creator=None, nsteps=None, gamma=None, lam=None):
+        enter_tf_session()
+
+        self.env = env_creator()
+        self.model = model_creator()
+        nenv = self.env.num_envs
+        self.obs = np.zeros((nenv,) + self.env.observation_space.shape, dtype=self.model.train_model.X.dtype.name)
+        self.obs[:] = self.env.reset()
         self.gamma = gamma
         self.lam = lam
         self.nsteps = nsteps
-        self.states = model.initial_state
+        self.states = self.model.initial_state
         self.dones = [False for _ in range(nenv)]
+
+    def set_params(self, params):
+        self.model.variables.set_flat(params)
 
     def run(self):
         mb_obs, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs = [],[],[],[],[],[]
@@ -138,6 +159,9 @@ class Runner(object):
         mb_returns = mb_advs + mb_values
         return (*map(sf01, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs)),
             mb_states, epinfos)
+
+RemoteRunner = ray.remote(Runner)
+
 # obs, returns, masks, actions, values, neglogpacs, states = runner.run()
 def sf01(arr):
     """
@@ -151,16 +175,18 @@ def constfn(val):
         return val
     return f
 
-def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
+def learn(*, policy, env_creator, nsteps, total_timesteps, ent_coef, lr,
             vf_coef=0.5,  max_grad_norm=0.5, gamma=0.99, lam=0.95,
             log_interval=10, nminibatches=4, noptepochs=4, cliprange=0.2,
-            save_interval=0):
+            save_interval=0, num_workers=1):
 
     if isinstance(lr, float): lr = constfn(lr)
     else: assert callable(lr)
     if isinstance(cliprange, float): cliprange = constfn(cliprange)
     else: assert callable(cliprange)
     total_timesteps = int(total_timesteps)
+
+    env = env_creator()
 
     nenvs = env.num_envs
     ob_space = env.observation_space
@@ -175,8 +201,15 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
         import cloudpickle
         with open(osp.join(logger.get_dir(), 'make_model.pkl'), 'wb') as fh:
             fh.write(cloudpickle.dumps(make_model))
+
+    enter_tf_session()
     model = make_model()
-    runner = Runner(env=env, model=model, nsteps=nsteps, gamma=gamma, lam=lam)
+    # runner = Runner(env_creator=env_creator, model_creator=make_model, nsteps=nsteps, gamma=gamma, lam=lam)
+
+    # TODO: Pass seed to runners.
+    nsteps_per_worker = int(np.ceil(nsteps / num_workers))
+    runners = [RemoteRunner.remote(env_creator=env_creator, model_creator=make_model, nsteps=nsteps_per_worker, gamma=gamma, lam=lam)
+               for _ in range(num_workers)]
 
     epinfobuf = deque(maxlen=100)
     tfirststart = time.time()
@@ -189,8 +222,45 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
         frac = 1.0 - (update - 1.0) / nupdates
         lrnow = lr(frac)
         cliprangenow = cliprange(frac)
-        obs, returns, masks, actions, values, neglogpacs, states, epinfos = runner.run() #pylint: disable=E0632
-        epinfobuf.extend(epinfos)
+
+        # Get the current model parameters.
+        params_id = ray.put(model.variables.get_flat())
+        # Set the parameters on the actors.
+        [runner.set_params.remote(params_id) for runner in runners]
+        # Get some rollouts.
+        results = ray.get([runner.run.remote() for runner in runners])
+
+        obs_list = []
+        returns_list = []
+        masks_list = []
+        actions_list = []
+        values_list = []
+        neglogpacs_list = []
+        states_list = []
+        for result in results:
+            obs, returns, masks, actions, values, neglogpacs, states, epinfos = result
+
+            obs_list.append(obs)
+            returns_list.append(returns)
+            masks_list.append(masks)
+            actions_list.append(actions)
+            values_list.append(values)
+            neglogpacs_list.append(neglogpacs)
+            assert states is None
+            # states_list.append(states)
+
+            epinfobuf.extend(epinfos)
+
+        obs = np.concatenate(obs_list)
+        returns = np.concatenate(returns_list)
+        masks = np.concatenate(masks_list)
+        actions = np.concatenate(actions_list)
+        values = np.concatenate(values_list)
+        neglogpacs = np.concatenate(neglogpacs_list)
+        states = None
+
+        # obs, returns, masks, actions, values, neglogpacs, states, epinfos = runner.run() #pylint: disable=E0632
+        # epinfobuf.extend(epinfos)
         mblossvals = []
         if states is None: # nonrecurrent version
             inds = np.arange(nbatch)
